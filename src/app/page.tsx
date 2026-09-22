@@ -1,69 +1,171 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import ChatSidebar from "@/components/ChatSidebar";
+import ChatMain from "@/components/ChatMain";
+import type { DocumentItem, Message, Session } from "@/types/db";
 
 export default function Home() {
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const loadedRef = useRef(false);
+
+  const refreshSessions = useCallback(async () => {
+    const res = await fetch("/api/sessions");
+    if (res.ok) {
+      const data = await res.json();
+      setSessions(data.sessions);
+    }
+  }, []);
+
+  const refreshDocuments = useCallback(async () => {
+    const res = await fetch("/api/documents");
+    if (res.ok) {
+      const data = await res.json();
+      setDocuments(data.documents);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    refreshSessions();
+    refreshDocuments();
+  }, [refreshSessions, refreshDocuments]);
+
+  const selectSession = async (id: string) => {
+    setCurrentId(id);
+    setError(null);
+    const res = await fetch(`/api/sessions/${id}/messages`);
+    if (res.ok) {
+      const data = await res.json();
+      setMessages(data.messages);
+    }
+  };
+
+  const newSession = () => {
+    setCurrentId(null);
+    setMessages([]);
+    setError(null);
+  };
+
+  const deleteSession = async (id: string) => {
+    const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      if (id === currentId) {
+        setCurrentId(null);
+        setMessages([]);
+      }
+      await refreshSessions();
+    }
+  };
+
+  /** 没有当前会话时先创建（返回可用 id） */
+  const ensureSession = async (): Promise<string | null> => {
+    if (currentId) return currentId;
+    const res = await fetch("/api/sessions", { method: "POST" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    await refreshSessions();
+    setCurrentId(data.session.id);
+    return data.session.id as string;
+  };
+
+  const send = async () => {
+    const content = input.trim();
+    if (!content || sending) return;
+    const id = await ensureSession();
+    if (!id) {
+      setError("创建会话失败，请重试");
+      return;
+    }
+    setSending(true);
+    setError(null);
+    setInput("");
+    const localUserMsg: Message = {
+      id: `local-${Date.now()}`,
+      session_id: id,
+      role: "user",
+      content,
+      sources: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, localUserMsg]);
+    try {
+      const res = await fetch(`/api/sessions/${id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "请求失败");
+      setMessages((prev) => [...prev, data.message]);
+      await refreshSessions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "发送失败");
+      setInput(content);
+      setMessages((prev) => prev.filter((m) => m.id !== localUserMsg.id));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const upload = async (file: File) => {
+    setUploading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/documents", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "上传失败");
+      await refreshDocuments();
+      if (data.duplicated) {
+        setError(`《${file.name}》已存在，已自动跳过`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "上传失败");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const deleteDocument = async (id: string) => {
+    const res = await fetch(`/api/documents/${id}`, { method: "DELETE" });
+    if (res.ok) await refreshDocuments();
+  };
+
+  const currentTitle =
+    sessions.find((s) => s.id === currentId)?.title ?? "新对话";
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="flex h-screen overflow-hidden bg-zinc-50 font-sans dark:bg-zinc-950">
+      <ChatSidebar
+        sessions={sessions}
+        currentId={currentId}
+        documents={documents}
+        uploading={uploading}
+        onSelect={selectSession}
+        onNew={newSession}
+        onDeleteSession={deleteSession}
+        onUpload={upload}
+        onDeleteDocument={deleteDocument}
+      />
+      <ChatMain
+        title={currentTitle}
+        messages={messages}
+        input={input}
+        sending={sending}
+        error={error}
+        onInputChange={setInput}
+        onSend={send}
+      />
     </div>
   );
 }
