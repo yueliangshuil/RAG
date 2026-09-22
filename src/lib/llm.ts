@@ -17,6 +17,7 @@ export function getChatModel(): ChatOpenAI {
       apiKey: getEnv("DEEPSEEK_API_KEY"),
       configuration: { baseURL: "https://api.deepseek.com" },
       temperature: 0.3,
+      timeout: 60_000, // 防止 API 无响应导致请求挂死
     });
   }
   return chatModel;
@@ -31,6 +32,7 @@ export function getEmbeddings(): OpenAIEmbeddings {
       apiKey: getEnv("SILICONFLOW_API_KEY"),
       configuration: { baseURL: "https://api.siliconflow.cn/v1" },
       batchSize: 32,
+      timeout: 60_000, // 防止 API 无响应导致请求挂死
     });
   }
   return embeddings;

@@ -57,3 +57,19 @@
 - `supabase start` 成功后输出完整密钥：API_URL=`http://127.0.0.1:54321`，SERVICE_ROLE_KEY / ANON_KEY 自动生成，填入 .env.local 即可。
 - 验证迁移：`docker exec supabase_db_RAG psql -U postgres -c "select extname from pg_extension;"` 确认 `vector` 扩展与 4 张表（sessions/messages/documents/chunks）均已创建。
 - **遗留问题**：`supabase_vector_RAG`（Logflare 日志服务容器）处于 Restarting 状态——它是可选的日志分析组件，与 pgvector 无关（pgvector 在 postgres 镜像内置），不影响应用；若持续重启可忽略或后续排查内存限制。
+
+## 2026-09-22 · 上传/问答接口全线挂起排障（僵尸开发服务器）
+
+### 12. 症状：所有 POST 挂起、GET 正常，curl 上传超时
+
+- **现象**：POST /api/documents（multipart）与 POST /api/sessions/[id]/chat（JSON）全部挂起 60-180s 无响应；GET 一切正常；服务器日志中**没有**这些请求的记录。
+- **误判排除过程**（重要方法论）：
+  1. 以为 SiliconFlow 网络问题 → 直连测试 200/1.9s，密钥有效；
+  2. 以为 LangChain 嵌入层问题 → 独立 Node 脚本跑 embedDocuments 210ms 成功（1024 维正确）；
+  3. 以为 formData 解析问题 → 连"无 body 的 POST"也挂，且基线 POST /api/sessions 也挂。
+- **根因**：后台启动 dev server 时用了 `pnpm dev | head -20`。当 .env.local 被修改触发 **env reload（内部重启）** 时，重启打印的日志超过 head 缓冲 → head 退出关闭管道 → pnpm 外壳被杀，但 **node 服务器进程成为孤儿僵尸**：端口 3000 仍在 LISTEN，内部运行时已损坏，所有新连接被接受后永不响应。后续 `pnpm dev` 因端口占用拒绝启动，报 "You can access the existing server... run taskkill /PID 65264 /F"。
+- **解法**：`taskkill //PID 65264 //F` 杀掉僵尸进程 → 重启 dev server（**不带 head 管道**，让输出自然写入任务文件）→ 全链路恢复。
+- **教训**：
+  1. 长驻进程（dev server）后台运行时**不要管道接 head/tail**，管道上游缓冲满会误杀服务；
+  2. Next.js 修改 .env.local 会触发内部重启，若服务被"半杀"，表现为端口占用 + 请求挂起 + 日志无记录，先 `netstat -an | grep :3000` 查僵尸监听再 `taskkill`；
+  3. LLM/Embedding 客户端必须显式配置 `timeout`（已加 60s），避免 API 无响应时请求永久挂死。
