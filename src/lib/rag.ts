@@ -3,6 +3,7 @@ import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { extractText } from "unpdf";
 import { getSupabaseAdmin } from "./supabase";
 import { getEmbeddings } from "./llm";
+import { bigramTokenize } from "./tokenizer";
 
 export interface IngestResult {
   duplicated: boolean;
@@ -67,6 +68,8 @@ export async function ingestDocument(buffer: Buffer, filename: string): Promise<
     content,
     chunk_index: i,
     embedding: JSON.stringify(vectors[i]),
+    // BM25 关键词检索：中文 bigram + 英文单词，供生成列 to_tsvector 使用
+    bigrams: bigramTokenize(content).join(" "),
   }));
   const BATCH_SIZE = 30;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
