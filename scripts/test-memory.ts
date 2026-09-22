@@ -37,7 +37,7 @@ async function main() {
   if (!session) throw new Error("会话创建失败");
   const sid = session.id;
 
-  const dialogue: [string, string][] = [
+  const dialogue: ["user" | "assistant", string][] = [
     ["user", "新员工入职在哪里领取电脑？"],
     ["assistant", "入职当天在 IT 部领取，型号为 ThinkPad T16 或 MacBook Air M4，需签署设备领用协议。"],
     ["user", "设备用了多久可以申请更换？"],
@@ -102,7 +102,7 @@ async function main() {
     ["assistant", "公司提供五险一金与补充商业保险，公积金按当地上限比例缴纳。"],
     ["user", "体检什么时候安排？"],
     ["assistant", "每年组织一次全员体检，40 岁以上员工增加颈动脉彩超与肿瘤标志物筛查。"],
-  ] as [string, string][]) {
+  ] as ["user" | "assistant", string][]) {
     const { data: msg } = await db
       .from("messages")
       .insert({ session_id: sid, role, content })

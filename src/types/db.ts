@@ -14,7 +14,15 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   sources: SourceRef[] | null;
+  /** 生成状态机：generating（后台生成中）/ done / interrupted（可继续生成） */
+  status: "generating" | "done" | "interrupted";
+  /** 中断/失败原因（前端展示） */
+  error: string | null;
   created_at: string;
+  /** 客户端专属（不入库）：当前生成阶段，如 thinking */
+  stage?: string;
+  /** 客户端专属（不入库）：模型响应缓慢提示 */
+  slowNotice?: boolean;
 }
 
 export interface SourceRef {

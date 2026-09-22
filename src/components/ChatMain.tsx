@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
+import MarkdownStream from "./MarkdownStream";
 import type { Message } from "@/types/db";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
   error: string | null;
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onContinue: (messageId: string) => void;
 }
 
 export default function ChatMain({
@@ -22,12 +24,25 @@ export default function ChatMain({
   error,
   onInputChange,
   onSend,
+  onContinue,
 }: Props) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // 自动滚动：仅当用户停留在底部附近时跟随，用户上翻查看时暂停
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
@@ -37,7 +52,11 @@ export default function ChatMain({
       </header>
 
       {/* 消息区 */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-6 py-4"
+      >
         <div className="mx-auto max-w-3xl space-y-6">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center pt-24 text-center">
@@ -48,15 +67,14 @@ export default function ChatMain({
             </div>
           )}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble key={m.id} message={m} onContinue={onContinue} />
           ))}
           {sending && (
             <div className="flex items-center gap-2 text-sm text-zinc-400">
               <span className="h-2 w-2 animate-pulse rounded-full bg-zinc-400" />
-              正在生成回答…
+              正在准备…
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
 
@@ -98,9 +116,16 @@ export default function ChatMain({
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  onContinue,
+}: {
+  message: Message;
+  onContinue: (messageId: string) => void;
+}) {
   const isUser = message.role === "user";
   const [showSources, setShowSources] = useState(false);
+  const generating = message.status === "generating";
 
   return (
     <div className={isUser ? "flex justify-end" : "flex justify-start"}>
@@ -113,9 +138,24 @@ function MessageBubble({ message }: { message: Message }) {
       >
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+        ) : generating ? (
+          <StreamingContent message={message} />
         ) : (
           <>
             <Markdown content={message.content} />
+            {message.status === "interrupted" && (
+              <div className="mt-3 rounded-lg bg-amber-50 p-3 dark:bg-amber-950/30">
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  ⚠️ 生成中断：{message.error ?? "未知原因"}
+                </p>
+                <button
+                  onClick={() => onContinue(message.id)}
+                  className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500"
+                >
+                  继续生成
+                </button>
+              </div>
+            )}
             {message.sources && message.sources.length > 0 && (
               <div className="mt-3 border-t border-zinc-200 pt-2 dark:border-zinc-700">
                 <button
@@ -145,5 +185,32 @@ function MessageBubble({ message }: { message: Message }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** 生成中的流式内容：阶段反馈（检索中/思考中）→ 增量渲染 → 卡顿提示 */
+function StreamingContent({ message }: { message: Message }) {
+  if (message.content === "") {
+    const label =
+      message.stage === "thinking"
+        ? "正在思考…"
+        : message.slowNotice
+          ? "模型响应较慢，请稍候…"
+          : "正在检索知识库…";
+    return (
+      <div className="flex items-center gap-2 py-1 text-sm text-zinc-400">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-zinc-400" />
+        {label}
+      </div>
+    );
+  }
+  return (
+    <>
+      <MarkdownStream text={message.content} />
+      {message.slowNotice && (
+        <p className="mt-2 text-xs text-zinc-400">模型响应较慢，继续生成中…</p>
+      )}
+      <span className="mt-1 inline-block h-3 w-2 animate-pulse bg-zinc-400" />
+    </>
   );
 }
