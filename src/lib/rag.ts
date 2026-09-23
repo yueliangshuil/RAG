@@ -17,7 +17,7 @@ export interface IngestResult {
  * - 中文分隔符优先级切割，缓解文本截断与语义断裂
  */
 export async function ingestDocument(buffer: Buffer, filename: string): Promise<IngestResult> {
-  // 1. 内容哈希去重
+  // 1. 内容哈希 + 版本化：同名同内容 → 跳过；同名不同内容 → 新版本
   const hash = createHash("sha256").update(buffer).digest("hex");
   const db = getSupabaseAdmin();
   const { data: existing } = await db
@@ -26,6 +26,18 @@ export async function ingestDocument(buffer: Buffer, filename: string): Promise<
     .eq("content_hash", hash)
     .maybeSingle();
   if (existing) return { duplicated: true };
+
+  // 同名最新版存在且内容不同 → 新版本（旧版置 is_latest=false）
+  const { data: latest } = await db
+    .from("documents")
+    .select("id, version")
+    .eq("filename", filename)
+    .eq("is_latest", true)
+    .maybeSingle();
+  const newVersion = latest ? latest.version + 1 : 1;
+  if (latest) {
+    await db.from("documents").update({ is_latest: false }).eq("id", latest.id);
+  }
 
   // 2. 文件解析（PDF / Markdown / 纯文本）
   const fileType = filename.split(".").pop()?.toLowerCase() ?? "txt";
@@ -56,7 +68,14 @@ export async function ingestDocument(buffer: Buffer, filename: string): Promise<
   // 5. 入库（文档记录 + 分块批量写入，pgvector 以 JSON 字符串传入）
   const { data: doc, error: docError } = await db
     .from("documents")
-    .insert({ filename, file_type: fileType, content_hash: hash, chunk_count: chunks.length })
+    .insert({
+      filename,
+      file_type: fileType,
+      content_hash: hash,
+      chunk_count: chunks.length,
+      version: newVersion,
+      is_latest: true,
+    })
     .select()
     .single();
   if (docError || !doc) {
