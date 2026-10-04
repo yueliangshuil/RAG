@@ -286,7 +286,11 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch("/api/documents", { method: "POST", body: formData });
+      const res = await fetch("/api/documents", {
+        method: "POST",
+        headers: { "x-service-token": process.env.NEXT_PUBLIC_SERVICE_TOKEN ?? "" },
+        body: formData,
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "上传失败");
       await refreshDocuments();
@@ -301,7 +305,10 @@ export default function Home() {
   };
 
   const deleteDocument = async (id: string) => {
-    const res = await fetch(`/api/documents/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/documents/${id}`, {
+      method: "DELETE",
+      headers: { "x-service-token": process.env.NEXT_PUBLIC_SERVICE_TOKEN ?? "" },
+    });
     if (res.ok) await refreshDocuments();
   };
 

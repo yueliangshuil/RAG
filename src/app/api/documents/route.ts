@@ -20,6 +20,12 @@ export async function GET() {
 
 /** 上传文档：解析 → 分块 → 嵌入 → 入库（重复文档自动跳过） */
 export async function POST(request: Request) {
+  // 服务间认证：写操作要求 X-Service-Token（约束感知 Agent 经服务端转发携带；
+  // 本机 UI 使用 NEXT_PUBLIC_SERVICE_TOKEN，仅演示用途，生产改为网关鉴权——见 DEV_LOG）
+  if (request.headers.get("x-service-token") !== process.env.SERVICE_TOKEN) {
+    return NextResponse.json({ error: "未授权的服务调用" }, { status: 401 });
+  }
+
   let formData: FormData;
   try {
     formData = await request.formData();
