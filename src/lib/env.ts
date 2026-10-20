@@ -12,3 +12,14 @@ export function getTopK(): number {
   const n = raw ? Number.parseInt(raw, 10) : 5;
   return Number.isNaN(n) ? 5 : n;
 }
+
+/**
+ * 流式演示延迟（毫秒）：每个 chunk 之间的停顿，仅用于演示/排障
+ * 断点续流（刷新续收、宽限期取消）需要生成过程持续足够长时间才能肉眼验证，
+ * 默认 0 不延迟；演示时设为 150-300。
+ */
+export function getStreamDelayMs(): number {
+  const raw = process.env.DEMO_STREAM_DELAY_MS;
+  const n = raw ? Number(raw) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}

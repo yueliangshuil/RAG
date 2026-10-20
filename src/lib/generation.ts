@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from "./supabase";
 import { getChatModel, getEmbeddings } from "./llm";
-import { getTopK } from "./env";
+import { getStreamDelayMs, getTopK } from "./env";
 import { buildTsQuery } from "./tokenizer";
 import { maybeSummarize, RECENT_WINDOW, saveMessageMemory, searchMessageMemories } from "./memory";
 import { debounce } from "./debounce";
@@ -196,6 +196,12 @@ export async function startGeneration(input: GenerationInput): Promise<void> {
       for (const sub of buf.subscribers) sub(piece, buf.total);
       fullContent += piece;
       persist(fullContent);
+      // 演示/排障：chunk 间人为停顿（DEMO_STREAM_DELAY_MS>0 时生效），
+      // 让生成过程持续足够长时间以便肉眼验证断点续流（默认 0 无影响）
+      const delayMs = getStreamDelayMs();
+      if (delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
 
     // ========== 5. 完成落库 ==========
