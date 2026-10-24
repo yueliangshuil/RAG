@@ -68,6 +68,24 @@ export default function Home() {
   }, []);
 
   /**
+   * 用户主动停止生成（DEV_LOG #24 生命周期状态机）：
+   * 两步操作——先调显式 stop 接口（服务端置 userStopped 标记 + 立即 abort 模型调用，
+   * 落 stopped 终态），再 abort 本地 SSE 连接。与网络断连（走宽限期）语义分离。
+   */
+  const stopStream = useCallback(async (messageId: string) => {
+    try {
+      await fetch(`/api/messages/${messageId}/stop`, { method: "POST" });
+    } catch {
+      /* stop 接口失败不阻塞：仍 abort 本地连接，走宽限期兜底 */
+    }
+    const ctrl = streamControllers.current.get(messageId);
+    if (ctrl) {
+      ctrl.abort();
+      streamControllers.current.delete(messageId);
+    }
+  }, []);
+
+  /**
    * SSE 断点续流连接：
    * - from = 已收到的累计字符数，服务端按偏移补发，天然去重；
    * - 网络断开自动重连（指数退避，最多 3 次）；
@@ -133,6 +151,15 @@ export default function Home() {
                 update({
                   status: "interrupted",
                   error: info.error ?? "生成中断",
+                  stage: undefined,
+                });
+                return;
+              } else if (ev.event === "stopped") {
+                finished = true;
+                const info = JSON.parse(ev.data);
+                update({
+                  status: "stopped",
+                  error: info.error ?? "用户主动停止",
                   stage: undefined,
                 });
                 return;
@@ -336,6 +363,7 @@ export default function Home() {
         onInputChange={setInput}
         onSend={send}
         onContinue={continueMessage}
+        onStop={stopStream}
       />
     </div>
   );

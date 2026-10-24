@@ -158,3 +158,20 @@
 - 实现：env.ts 新增 getStreamDelayMs()（默认 0 无影响）；生成循环每个 chunk 广播后 setTimeout 停顿（DEMO_STREAM_DELAY_MS>0 时生效，当前配置 150ms）；
 - 演示脚本：问一个长问题（如"详细讲解XX文档的全部要点，逐条展开"）→ 生成进行到一半按 F5 → 观察：内容不是从头重生成，而是从已有部分继续流（消息 ID 不变、无重复内容）；Network 面板可见两个 /stream 请求，第一个 canceled、第二个带 from=偏移参数——这是断点续传的直接证据；
 - 停顿位置在广播之后：订阅者先收到 chunk，停顿只拉长总时长，不改变时序语义；取消场景最多多等一个延迟周期（几百 ms），宽限期语义不变。
+
+## 2026-10-24 · 消息生命周期状态机（主动停止 vs 网络断连语义分离）
+
+### 24. stopped 状态 + 显式 stop 接口：解决"用户停止后刷新任务复活"的语义缺陷
+
+- 背景（面试深挖暴露）：此前"用户主动停止"与"网络断连"在服务端是同一个信号（abort + 订阅者归零），共用 5 秒宽限期靠"有没有人回来"隐式猜意图——用户点停止后 5 秒内刷新页面，任务复活继续生成；语义完全相反的两个场景走了同一条路；
+- 迁移 006：messages 状态机加 stopped（generating / done / interrupted / stopped 四态）；
+- 实现：
+  1. StreamBuffer 加 userStopped 标记 + onStopped 监听集合；
+  2. 新增 POST /api/messages/[id]/stop——置标记 + 清宽限计时器 + 立即 abort 模型调用（**不等宽限期**）；缓冲区已丢失时兜底把 generating 记录置 stopped；
+  3. 生成循环 catch 按标记分流：userStopped → stopped 终态（error=用户主动停止，不提供继续生成）；否则 → interrupted（可继续生成）；
+  4. stream route：abort 处理跳过 userStopped 的宽限期调度；stopped 状态重连补发内容 + stopped 事件；
+  5. 前端停止按钮两步操作：先调 stop 接口再 abort 本地 SSE；stopped 状态显示"已停止生成（保留已生成内容）"，无继续按钮；
+- 验证（双场景实测）：
+  - 主动停止：stop 接口后 2 秒内状态 stopped（远小于 5 秒宽限期）✓
+  - 网络断连：断开 SSE 不调 stop → 宽限期后 interrupted（继续生成按钮保留）✓
+- 面试讲法：状态机从"隐式猜意图"升级为"显式区分"——主动停止立即终止零等待，网络断连保留宽限期等重连；区分的关键是显式 stop 接口（前端先标记再断连，服务端按标记决定路径）。剩余优化项：stopped/interrupted 消息的 TTL 清理（僵尸消息回收）。

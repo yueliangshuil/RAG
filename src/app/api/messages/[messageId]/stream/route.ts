@@ -68,6 +68,10 @@ export async function GET(request: Request, { params }: Params) {
         send(cum, "interrupted", JSON.stringify({ status: "interrupted", error: reason }));
         close();
       };
+      const onStopped = (cum: number) => {
+        send(cum, "stopped", JSON.stringify({ status: "stopped", error: "用户主动停止" }));
+        close();
+      };
 
       const removeHandlers = () => {
         if (buf) {
@@ -75,6 +79,7 @@ export async function GET(request: Request, { params }: Params) {
           buf.stageListeners.delete(forwardStage);
           buf.onDone.delete(onDone);
           buf.onInterrupted.delete(onInterrupted);
+          buf.onStopped.delete(onStopped);
         }
       };
       const cleanup = () => {
@@ -96,7 +101,8 @@ export async function GET(request: Request, { params }: Params) {
         // 注意：closed 必须在 cleanup() 之前捕获——cleanup 会置 closed=true
         const naturalEnd = closed;
         cleanup();
-        if (!naturalEnd) scheduleCancelIfNoListeners();
+        // 用户主动停止（显式 stop 接口已 abort 任务）→ 跳过宽限期调度（DEV_LOG #24）
+        if (!naturalEnd && !buf?.userStopped) scheduleCancelIfNoListeners();
       });
 
       // 心跳：15s 无内容时发送 ping，防止代理误断 + 客户端卡顿感知
@@ -119,6 +125,16 @@ export async function GET(request: Request, { params }: Params) {
           "interrupted",
           JSON.stringify({ status: "interrupted", error: msg.error, content: msg.content })
         );
+        close();
+        return;
+      }
+
+      // ===== 用户主动停止（终态，无继续生成） =====
+      if (msg.status === "stopped") {
+        if (from < msg.content.length) {
+          send(msg.content.length, "delta", msg.content.slice(from));
+        }
+        send(msg.content.length, "stopped", JSON.stringify({ status: "stopped", error: msg.error ?? "用户主动停止" }));
         close();
         return;
       }

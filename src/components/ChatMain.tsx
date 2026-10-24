@@ -14,6 +14,7 @@ interface Props {
   onInputChange: (value: string) => void;
   onSend: () => void;
   onContinue: (messageId: string) => void;
+  onStop: (messageId: string) => void;
 }
 
 export default function ChatMain({
@@ -25,6 +26,7 @@ export default function ChatMain({
   onInputChange,
   onSend,
   onContinue,
+  onStop,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // 自动滚动：仅当用户停留在底部附近时跟随，用户上翻查看时暂停
@@ -67,7 +69,7 @@ export default function ChatMain({
             </div>
           )}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} onContinue={onContinue} />
+            <MessageBubble key={m.id} message={m} onContinue={onContinue} onStop={onStop} />
           ))}
           {sending && (
             <div className="flex items-center gap-2 text-sm text-zinc-400">
@@ -119,9 +121,11 @@ export default function ChatMain({
 function MessageBubble({
   message,
   onContinue,
+  onStop,
 }: {
   message: Message;
   onContinue: (messageId: string) => void;
+  onStop: (messageId: string) => void;
 }) {
   const isUser = message.role === "user";
   const [showSources, setShowSources] = useState(false);
@@ -139,7 +143,15 @@ function MessageBubble({
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm">{message.content}</p>
         ) : generating ? (
-          <StreamingContent message={message} />
+          <>
+            <StreamingContent message={message} />
+            <button
+              onClick={() => onStop(message.id)}
+              className="mt-2 rounded-lg border border-zinc-300 px-3 py-1 text-xs text-zinc-500 hover:border-red-300 hover:text-red-500 dark:border-zinc-700"
+            >
+              ⏹ 停止生成
+            </button>
+          </>
         ) : (
           <>
             <Markdown content={message.content} />
@@ -154,6 +166,13 @@ function MessageBubble({
                 >
                   继续生成
                 </button>
+              </div>
+            )}
+            {message.status === "stopped" && (
+              <div className="mt-3 rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  ⏹ 已停止生成（保留已生成内容）
+                </p>
               </div>
             )}
             {message.sources && message.sources.length > 0 && (

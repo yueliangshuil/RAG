@@ -29,10 +29,13 @@ interface StreamBuffer {
   stageListeners: Set<(stage: string) => void>;
   onDone: Set<(cumulative: number) => void>;
   onInterrupted: Set<(reason: string, cumulative: number) => void>;
+  onStopped: Set<(cumulative: number) => void>;
   total: number;
-  /** 任务取消信号：客户端断开且无订阅者（宽限期后）时触发 */
+  /** 任务取消信号：客户端断开且无订阅者（宽限期后）或用户主动停止时触发 */
   cancelController: AbortController;
   cancelTimer: ReturnType<typeof setTimeout> | null;
+  /** 用户主动停止标记（DEV_LOG #24）：区分主动停止与网络断连——主动停止跳过宽限期直接终止 */
+  userStopped: boolean;
   done: boolean;
   failed: boolean;
 }
@@ -44,6 +47,40 @@ const buffers = new Map<string, StreamBuffer>();
 
 export function getBuffer(messageId: string): StreamBuffer | undefined {
   return buffers.get(messageId);
+}
+
+/**
+ * 用户主动停止生成（DEV_LOG #24）：
+ * 与网络断连语义分离——置 userStopped 标记并立即 abort 模型调用（不走宽限期），
+ * 生成循环 catch 分支按标记落 stopped 终态。缓冲区已不存在（任务刚完成/服务重启）
+ * 时兜底把 generating 记录置 stopped。
+ */
+export async function stopGeneration(messageId: string): Promise<"stopped" | "not_found"> {
+  const buf = buffers.get(messageId);
+  if (buf && !buf.done && !buf.failed) {
+    buf.userStopped = true;
+    if (buf.cancelTimer) {
+      clearTimeout(buf.cancelTimer);
+      buf.cancelTimer = null;
+    }
+    buf.cancelController.abort();
+    return "stopped";
+  }
+  // 兜底：缓冲区不存在但 DB 仍停在 generating（任务丢失）→ 置 stopped 而非 interrupted
+  const db = getSupabaseAdmin();
+  const { data: msg } = await db
+    .from("messages")
+    .select("status")
+    .eq("id", messageId)
+    .single();
+  if (msg?.status === "generating") {
+    await db
+      .from("messages")
+      .update({ status: "stopped", error: "用户主动停止" })
+      .eq("id", messageId);
+    return "stopped";
+  }
+  return "not_found";
 }
 
 export interface GenerationInput {
@@ -64,9 +101,11 @@ export async function startGeneration(input: GenerationInput): Promise<void> {
     stageListeners: new Set(),
     onDone: new Set(),
     onInterrupted: new Set(),
+    onStopped: new Set(),
     total: continueFrom?.length ?? 0,
     cancelController: new AbortController(),
     cancelTimer: null,
+    userStopped: false,
     done: false,
     failed: false,
   };
@@ -213,17 +252,31 @@ export async function startGeneration(input: GenerationInput): Promise<void> {
     void saveMessageMemory(sessionId, messageId, "assistant", fullContent);
     void maybeSummarize(sessionId);
   } catch (err) {
-    // ========== 异常/取消：保留已生成部分，标记 interrupted ==========
+    // ========== 异常/取消：保留已生成部分，按语义分流（DEV_LOG #24）==========
+    // userStopped：用户主动停止 → stopped 终态（不提供继续生成）
+    // 其他（断连宽限期超时/异常）：interrupted，可继续生成
     const reason = err instanceof Error ? err.message : "生成失败";
-    console.error(`[generation] 消息 ${messageId.slice(0, 8)} 生成失败:`, reason);
-    if (fullContent) {
-      persist.flush(fullContent);
-      await db.from("messages").update({ content: fullContent, status: "interrupted", error: reason }).eq("id", messageId);
+    if (buf.userStopped) {
+      console.log(`[generation] 消息 ${messageId.slice(0, 8)} 用户主动停止`);
+      if (fullContent) {
+        persist.flush(fullContent);
+        await db.from("messages").update({ content: fullContent, status: "stopped", error: "用户主动停止" }).eq("id", messageId);
+      } else {
+        await db.from("messages").update({ status: "stopped", error: "用户主动停止" }).eq("id", messageId);
+      }
+      buf.failed = true;
+      for (const s of buf.onStopped) s(buf.total);
     } else {
-      await db.from("messages").update({ status: "interrupted", error: reason }).eq("id", messageId);
+      console.error(`[generation] 消息 ${messageId.slice(0, 8)} 生成失败:`, reason);
+      if (fullContent) {
+        persist.flush(fullContent);
+        await db.from("messages").update({ content: fullContent, status: "interrupted", error: reason }).eq("id", messageId);
+      } else {
+        await db.from("messages").update({ status: "interrupted", error: reason }).eq("id", messageId);
+      }
+      buf.failed = true;
+      for (const i of buf.onInterrupted) i(reason, buf.total);
     }
-    buf.failed = true;
-    for (const i of buf.onInterrupted) i(reason, buf.total);
   } finally {
     if (buf.cancelTimer) clearTimeout(buf.cancelTimer);
     buffers.delete(messageId);

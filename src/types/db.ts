@@ -14,8 +14,8 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   sources: SourceRef[] | null;
-  /** 生成状态机：generating（后台生成中）/ done / interrupted（可继续生成） */
-  status: "generating" | "done" | "interrupted";
+  /** 生成状态机：generating（后台生成中）/ done / interrupted（断连中断，可继续生成）/ stopped（用户主动停止，终态） */
+  status: "generating" | "done" | "interrupted" | "stopped";
   /** 中断/失败原因（前端展示） */
   error: string | null;
   created_at: string;
